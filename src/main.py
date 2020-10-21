@@ -15,7 +15,7 @@ def wiki_api():
         # "titles": 'Wikipedia',
         "prop": "templates",
         "format": "json",
-        "tlnamespace": 10
+        # "tlnamespace": 10
     }
 
     response = session.get(url=url, params=params)
@@ -39,4 +39,4 @@ if __name__ == "__main__":
     # for now, only parse english wikipedia
 
     # wiki_api()
-    parse_xml_file("enwiki-latest-pages-articles.xml", 200)
+    parse_xml_file("..\enwiki-latest-pages-articles.xml", 200)
