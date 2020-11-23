@@ -1,6 +1,10 @@
+cswiki-latest-pages-articles.xml
 enwiki-latest-pages-articles.xml
+skwiki-latest-pages-articles.xml
 VINF.drawio
 VINF.png
 VINF.txt
 venv\
 .idea\
+src/cs_templates.txt
+src/sk_templates.txt
