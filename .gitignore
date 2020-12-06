@@ -8,3 +8,4 @@ venv\
 .idea\
 src/cs_templates.txt
 src/sk_templates.txt
+src/en_templates.txt
