@@ -1,7 +1,6 @@
 import requests
 import re
-from elasticsearch import Elasticsearch
-from src.html_parser import CustomHtmlParser
+from os import path
 
 
 def wiki_api(lang: str):
@@ -11,6 +10,10 @@ def wiki_api(lang: str):
 
     :return:
     """
+
+    if path.exists(f"{lang}_templates.txt"):
+        print("Templates already collected.")
+        return
 
     with open(f"{lang}_templates.txt", "w", encoding="utf-8") as f:
         session = requests.Session()
@@ -44,65 +47,6 @@ def wiki_api(lang: str):
             counter += 1
 
 
-def parse_xml_file(file_lang: str, num_pages: int):
-    es = Elasticsearch()
-
-    myparser = CustomHtmlParser()
-    template_translation = {
-        "sk": "Šablóna",
-        "cs": "Šablona",
-        "en": "Template"
-    }
-
-    with open(f"../{file_lang}wiki-latest-pages-articles.xml", "r", encoding="utf8") as file:
-        pages = 0
-        namespaces = {}
-
-        for line in file:
-            # print(line.strip())
-
-            # first, get namespace number of Template pages
-            if "<namespaces>" in line:
-                # print(f"namespace line: {line.strip()}")
-
-                for namespace_line in file:
-                    # print(namespace_line.strip())
-                    myparser.reset()
-                    myparser.parse(namespace_line)
-                    if myparser.start_tag == 'namespace':
-                        # get all namespace numbers from namespace html lines
-                        namespaces[myparser.content] = myparser.params.get('key')
-
-                    if "</namespaces>" in namespace_line:
-                        template_namespace = namespaces[template_translation[file_lang]]
-                        break
-
-            if "<page>" in line:
-                page_xml = ""
-                # concatenate all lines of page into single html/xml string
-                for page_line in file:
-
-                    if "<page>" in page_line:
-                        continue
-                    if "</page>" in page_line:
-                        myparser.reset()
-                        myparser.parse_page(xml_string=page_xml)
-                        pages += 1
-                        # if parsed page is a template, then upload this template to elasticsearch
-                        page_dict = myparser.params
-                        if int(page_dict['ns']) == int(template_namespace):
-                            pass
-                            es.index(index="vi_index", id=pages, body=page_dict)
-                            print(f"Insert {page_dict['title']} namespace {page_dict['ns']}.")
-                        break
-
-                    page_xml += page_line.strip()
-
-            if pages >= num_pages:
-                print(f"Parsed {pages} pages from {file_lang}wiki.")
-                break
-
-
 # global variables to count templates for stats
 known_templates = []
 template_count = 0
@@ -128,7 +72,7 @@ def check_template(name: str) -> bool:
         name_match = name[0].upper() + name[1:]
         with open("en_templates.txt", "r", encoding="utf-8") as f:
             for line in f:
-                if line == f"Template:{name_match}\n":
+                if line == f"Template:{name_match}\n" or line == f"Template:{name_match}/doc\n":
                     known_templates.append(name)
                     is_valid = True
                     break
@@ -139,21 +83,21 @@ def check_template(name: str) -> bool:
 # number of caught false templates
 false = 0
 
-
-def remove_wikilinks(template: str) -> str:
-    """
-    function that finds all Wikilinks and replaces dangerous pipes with safe Wikilink(LINK)
-
-    :param template: whole template
-    :return: same template with replaced Wikilinks
-    """
-
-    wikilink_regex = "\[\[.*?\]\]"
-    links = re.findall(wikilink_regex, template)
-    for link in links:
-        edited_link = link.split('|')[0].replace('[', '').replace(']', '')
-        template = template.replace(link, f"Wikilink({edited_link})")
-    return template
+#
+# def remove_wikilinks(template: str) -> str:
+#     """
+#     function that finds all Wikilinks and replaces dangerous pipes with safe Wikilink(LINK)
+#
+#     :param template: whole template
+#     :return: same template with replaced Wikilinks
+#     """
+#
+#     wikilink_regex = "\[\[.*?\]\]"
+#     links = re.findall(wikilink_regex, template)
+#     for link in links:
+#         edited_link = link.replace('|', 'WikiLinkPipe()')
+#         template = template.replace(link, edited_link)
+#     return template
 
 
 def get_template_info(template: str) -> str:
@@ -176,11 +120,11 @@ def get_template_info(template: str) -> str:
     name = ''
     params = []
 
-    # remove dangerous wikilinks, they sometimes contain pipes that will mess up template parsing, for example
-    # [[Android (operating system)|Android]]
-    template = remove_wikilinks(template)
+    # template is split along "|" characters to get all its parameters, but these "pipes" cant be inside [], because
+    # then they would be a part of a wikilink that's inside current template
+    parameters = re.split(r"\|(?![^\[\]]*])", template)
 
-    for index, item in enumerate(template.split('|')):
+    for index, item in enumerate(parameters):
         # name of the template is always first item
         if index == 0:
             name = item.strip()
@@ -189,17 +133,18 @@ def get_template_info(template: str) -> str:
             if not template_check:
                 print(f"False positive Template found: {name}")
                 false += 1
-                return f"False positive Template"
+                return template
         # then we can parse template parameters
         else:
-            param = item.split('=')
+            # regex split for parameters that contain XML elements inside them (< and > parentheses)
+            param = re.split(r'=(?![^<>]*>)', item)
             if len(param) > 1:
                 params.append(f"{param[0].strip()}: {param[1].strip()}")
             else:
                 params.append(f"{ordinal(index)} (unnamed): {param[0].strip() if param[0] else None}")
 
     tmplt = f"ParsedTemplate(name is {name}, params are {params if params else None})"
-    print(f"Found template {name} with parameters: {'' if len(params) > 1 else None}")
+    print(f"Found template {name} with parameters: {'' if len(params) > 0 else None}")
     for param in params:
         print(f"\t\t{param}")
     template_count += 1
@@ -229,6 +174,10 @@ def get_wiki_text():
     function waits for mediaWiki text input and constructs a single line string that is then sent into parse function
     """
 
+    if not path.exists(f"en_templates.txt"):
+        print("You need to collect templates from API first.")
+        return
+
     # read text until User inputs "exit!"
     print("Insert mediawiki text and press Enter:")
     lines = []
@@ -246,12 +195,25 @@ def get_wiki_text():
     parse_templates(input_text=text)
 
 
+def print_menu():
+    print("[1] Get Wikipedia Templates from API (lasts 8-10 minutes)")
+    print("[2] Parse Templates from MediaWiki text")
+    print("[0] Exit application")
+
+
 if __name__ == "__main__":
-    # get template names for all language versions of Wikipedia
-    # for language in ['en']:
-    #     wiki_api(language)
 
-    # for language in ['en']:
-    #     parse_xml_file(language, 150000)
+    print_menu()
+    option = input("Select an Option: ")
 
-    get_wiki_text()
+    while option != '0':
+        if option == '1':
+            wiki_api('en')
+        elif option == '2':
+            get_wiki_text()
+        else:
+            print("Invalid Input.")
+
+        print()
+        print_menu()
+        option = input("Select an Option: ")

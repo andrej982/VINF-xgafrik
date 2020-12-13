@@ -1,2 +1,2 @@
-# VINF zadanie
+# VI zadanie
 Autor: Andrej Gáfrik
